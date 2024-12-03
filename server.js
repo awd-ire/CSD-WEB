@@ -1,22 +1,23 @@
-const mysql = require('mysql2');
 const express = require('express');
+const mysql = require('mysql2');
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const app = express();
 
-// Allow CORS
+// Middleware
 app.use(cors());
-
-// Serve static files
 app.use(express.static('public'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Database connection
 const db = mysql.createConnection({
     host: 'localhost',
     user: 'dilip',
     password: '3615',
-    database: 'csd_dept_web',
+    database: 'demo',
 });
 
 db.connect((err) => {
@@ -27,8 +28,38 @@ db.connect((err) => {
     }
 });
 
-// Fetch list of notes
-app.get('/notes', (req, res) => {
+// File storage configuration
+const storage = multer.diskStorage({
+    destination: './public/uploads', // Directory where files will be stored
+    filename: (req, file, cb) => {
+        cb(null, `${Date.now()}_${file.originalname}`); // Name the file with current timestamp to avoid conflicts
+    },
+});
+
+const upload = multer({ storage });
+
+// Route to handle file upload
+app.post('/upload', upload.single('note'), (req, res) => {
+    const subjectName = req.body.subject_name;
+    const filePath = `/uploads/${req.file.filename}`; // Save the relative file path to the database
+
+    if (!subjectName || !req.file) {
+        return res.status(400).send('Subject name and file are required');
+    }
+
+    // Insert data into the database
+    const sql = 'INSERT INTO notes (subject_name, notes_url) VALUES (?, ?)';
+    db.query(sql, [subjectName, filePath], (err) => {
+        if (err) {
+            console.error('Error inserting note:', err);
+            return res.status(500).send('Failed to upload note');
+        }
+        res.send('Note uploaded successfully');
+    });
+});
+
+// Route to fetch notes from database (for download interface)
+app.get('/notes1', (req, res) => {
     const sql = 'SELECT notes_id, subject_name FROM notes';
     db.query(sql, (err, results) => {
         if (err) {
@@ -39,8 +70,8 @@ app.get('/notes', (req, res) => {
     });
 });
 
-// File download route
-app.get('/file/:id', (req, res) => {
+// Route to download the file
+app.get('/download/:id', (req, res) => {
     const fileId = req.params.id;
     const sql = 'SELECT subject_name, notes_url FROM notes WHERE notes_id = ?';
 
@@ -55,8 +86,7 @@ app.get('/file/:id', (req, res) => {
             return res.status(404).send('File not found');
         }
 
-        const filePath = result[0].notes_url;
-        const fileName = result[0].subject_name;
+        const filePath = path.join(__dirname, 'public', result[0].notes_url);
 
         fs.access(filePath, fs.constants.F_OK, (err) => {
             if (err) {
@@ -64,7 +94,7 @@ app.get('/file/:id', (req, res) => {
                 return res.status(404).send('File not found');
             }
 
-            res.download(filePath, fileName, (err) => {
+            res.download(filePath, result[0].subject_name, (err) => {
                 if (err) {
                     console.error('Error sending file:', err);
                 }
